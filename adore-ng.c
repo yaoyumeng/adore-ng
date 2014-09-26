@@ -60,12 +60,12 @@ uint64_t clear_return_cr0(void)
 {
 	uint64_t cr0 = 0;
 	uint64_t ret;
-	asm volatile ("movl %%cr0, %%rax"
+	asm volatile ("mov %%cr0, %%rax"
 	:"=a"(cr0)
 	);
 	ret = cr0;
 	cr0 &= 0xfffeffff;
-	asm volatile ("movl %%rax, %%cr0"
+	asm volatile ("mov %%rax, %%cr0"
 	:
 	:"a"(cr0)
 	);
@@ -73,7 +73,7 @@ uint64_t clear_return_cr0(void)
 }
 void setback_cr0(uint64_t val)
 {
-	asm volatile ("movl %%rax, %%cr0"
+	asm volatile ("mov %%rax, %%cr0"
 	:
 	:"a"(val)
 	);
@@ -602,6 +602,19 @@ ssize_t adore_var_write(struct file *f, const char *buf, size_t blen, loff_t *of
 	}
 	return orig_var_write(f, buf, blen, off);
 }	
+
+#ifndef kobject_unregister
+void kobject_unregister(struct kobject * kobj)
+{
+	if (!kobj)
+		return;
+	
+	pr_debug("kobject %s: unregistering\n",kobject_name(kobj));
+	kobject_uevent(kobj, KOBJ_REMOVE);
+	kobject_del(kobj);
+	kobject_put(kobj);
+}
+#endif
 
 int __init adore_init(void)
 {
