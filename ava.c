@@ -117,7 +117,7 @@ int main(int argc, char *argv[])
 		break;
         /* execute command as root */
         case 'r': 
-		execve(argv[2], argv+2, environ);
+		execvp(argv[2], argv+2);
 		perror("execve");
 		break;
 	case 'R':
