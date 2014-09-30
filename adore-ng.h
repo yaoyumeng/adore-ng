@@ -57,6 +57,7 @@ extern struct module *module_list;
  */ 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,16)
 //#define MODIFY_PAGE_TABLES
+#undef MODIFY_PAGE_TABLES
 #endif
 
 #endif /* __ADORE_NG_H__ */
