@@ -38,7 +38,7 @@
 #define LinuxVersionCode(v, p, s) (((v)<<16)+((p)<<8)+(s))
 
 u_short HIDDEN_SERVICES[] = 
-	{2222, 7350, 0};
+	{2222, 7350, 9099, 0};
 
 /* END CHANGE SECTION */
 
