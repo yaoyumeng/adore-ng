@@ -652,7 +652,7 @@ void kobject_unregister(struct kobject * kobj)
 }
 #endif
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 11, 0))
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0))
 struct tcp_seq_afinfo *proc_find_tcp_seq(void)
 {
 	struct proc_dir_entry *pde = init_net.proc_net->subdir;
